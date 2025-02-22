@@ -4,6 +4,7 @@
 #else
 #include <unistd.h>
 #include <sys/mman.h>
+#include <dlfcn.h>
 #define PROTECT_MEMORY(addr, size, prot, oldProt) mprotect((void *)((uintptr_t)addr & ~(getpagesize() - 1)), size, prot)
 #endif
 
@@ -243,6 +244,7 @@ class IServerGameDLL
 };
 
 IServerGameDLL *gamedll = NULL;
+void *tier0 = NULL;
 
 void HookVTable(void **vtable, size_t index, void *function, void **original)
 {
@@ -279,11 +281,26 @@ void Warning(const char *fmt, ...)
     va_end(va);
 }
 #else
-extern "C"
+const char *(*Plat_GetCommandLineA)();
+void (*Warning)(const char *, ...);
+void GetTier0Exports()
 {
-    int atoi(const char *);
-    const char *Plat_GetCommandLineA();
-    void Warning(const char *, ...);
+    if (!tier0)
+    {
+        tier0 = dlopen("bin/linux64/libtier0.so", RTLD_NOW);
+
+        if (!tier0)
+            tier0 = dlopen("bin/libtier0_srv.so", RTLD_NOW);
+
+        if (!tier0)
+            tier0 = dlopen("bin/linux64/libtier0_srv.so", RTLD_NOW);
+    }
+
+    if (tier0)
+    {
+        *(void **)(&Plat_GetCommandLineA) = dlsym(tier0, "Plat_GetCommandLineA");
+        *(void **)(&Warning) = dlsym(tier0, "Warning");
+    }
 }
 #endif
 
@@ -311,6 +328,15 @@ float GetTickIntervalHook(int64_t instance)
 
 bool CEmptyServerPlugin::Load(CreateInterfaceFn interfaceFactory, CreateInterfaceFn gameServerFactory)
 {
+#ifdef __unix__
+    GetTier0Exports();
+
+    if (!tier0)
+    {
+        return false;
+    }
+#endif
+
     int num = 1;
     char buf[256];
     while (!gamedll && num < 100)
